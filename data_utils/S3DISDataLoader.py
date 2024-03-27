@@ -43,6 +43,8 @@ class S3DISDataset(Dataset):
         for index in range(len(rooms_split)):
             room_idxs.extend([index] * int(round(sample_prob[index] * num_iter)))
         self.room_idxs = np.array(room_idxs)
+        print(room_idxs)
+        print(room_idxs.size)
         print("Totally {} samples in {} set.".format(len(self.room_idxs), split))
 
     def __getitem__(self, idx):

@@ -68,6 +68,7 @@ def farthest_point_sample(xyz, npoint):
     Return:
         centroids: sampled pointcloud index, [B, npoint]
     """
+    #start_time = time()
     device = xyz.device
     B, N, C = xyz.shape
     centroids = torch.zeros(B, npoint, dtype=torch.long).to(device)
@@ -81,8 +82,24 @@ def farthest_point_sample(xyz, npoint):
         mask = dist < distance
         distance[mask] = dist[mask]
         farthest = torch.max(distance, -1)[1]
+    #print("------------------------------")
+    #end_time = time()
+    #inference_time = end_time - start_time
+    #print(inference_time)
     return centroids
 
+def random_point_sample(xyz, npoint):
+    """
+    Input:
+        xyz: pointcloud data, [B, N, 3]
+        npoint: number of samples
+    Return:
+        centroids: sampled pointcloud index, [B, npoint]
+    """
+    device = xyz.device
+    B, N, _ = xyz.shape
+    centroids = torch.randint(0, N, (B, npoint), dtype=torch.long).to(device)
+    return centroids
 
 def query_ball_point(radius, nsample, xyz, new_xyz):
     """
@@ -121,7 +138,13 @@ def sample_and_group(npoint, radius, nsample, xyz, points, returnfps=False):
     """
     B, N, C = xyz.shape
     S = npoint
-    fps_idx = farthest_point_sample(xyz, npoint) # [B, npoint, C]
+    #start_time = time()
+    # fps_idx = farthest_point_sample(xyz, npoint) # [B, npoint, C]
+    fps_idx = random_point_sample(xyz, npoint) # [B, npoint, C]
+    #end_time = time()
+    #print("pxy: ", end = '')
+    #print((end_time - start_time) * 1000, end = ' ')
+    #print("ms")
     new_xyz = index_points(xyz, fps_idx)
     idx = query_ball_point(radius, nsample, xyz, new_xyz)
     grouped_xyz = index_points(xyz, idx) # [B, npoint, nsample, C]

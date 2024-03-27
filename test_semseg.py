@@ -5,6 +5,7 @@ Date: Nov 2019
 import argparse
 import os
 from data_utils.S3DISDataLoader import ScannetDatasetWholeScene
+from data_utils.SonarDataLoader import ShapeNetDataset,ShapeNetDatasetWholeScene
 from data_utils.indoor3d_util import g_label2color
 import torch
 import logging
@@ -14,13 +15,16 @@ import importlib
 from tqdm import tqdm
 import provider
 import numpy as np
+import time
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 ROOT_DIR = BASE_DIR
 sys.path.append(os.path.join(ROOT_DIR, 'models'))
 
-classes = ['ceiling', 'floor', 'wall', 'beam', 'column', 'window', 'door', 'table', 'chair', 'sofa', 'bookcase',
-           'board', 'clutter']
+#classes = ['ceiling', 'floor', 'wall', 'beam', 'column', 'window', 'door', 'table', 'chair', 'sofa', 'bookcase',
+#           'board', 'clutter']
+
+classes = ['Box','Man','Other','Water_surface']
 class2label = {cls: i for i, cls in enumerate(classes)}
 seg_classes = class2label
 seg_label_to_cat = {}
@@ -31,12 +35,12 @@ for i, cat in enumerate(seg_classes.keys()):
 def parse_args():
     '''PARAMETERS'''
     parser = argparse.ArgumentParser('Model')
-    parser.add_argument('--batch_size', type=int, default=32, help='batch size in testing [default: 32]')
+    parser.add_argument('--batch_size', type=int, default=16, help='batch size in testing [default: 16]')
     parser.add_argument('--gpu', type=str, default='0', help='specify gpu device')
-    parser.add_argument('--num_point', type=int, default=4096, help='point number [default: 4096]')
+    parser.add_argument('--num_point', type=int, default=2048, help='point number [default: 4096]')
     parser.add_argument('--log_dir', type=str, required=True, help='experiment root')
     parser.add_argument('--visual', action='store_true', default=False, help='visualize result [default: False]')
-    parser.add_argument('--test_area', type=int, default=5, help='area for testing, option: 1-6 [default: 5]')
+    #parser.add_argument('--test_area', type=int, default=5, help='area for testing, option: 1-6 [default: 5]')
     parser.add_argument('--num_votes', type=int, default=3, help='aggregate segmentation scores with voting [default: 5]')
     return parser.parse_args()
 
@@ -75,13 +79,15 @@ def main(args):
     log_string('PARAMETER ...')
     log_string(args)
 
-    NUM_CLASSES = 13
+    NUM_CLASSES = 4
     BATCH_SIZE = args.batch_size
     NUM_POINT = args.num_point
 
-    root = 'data/s3dis/stanford_indoor3d/'
+    #root = 'data/s3dis/stanford_indoor3d/'
+    root = '/home/data6T/pxy/pointnet.pytorch/sonar_data/'
 
-    TEST_DATASET_WHOLE_SCENE = ScannetDatasetWholeScene(root, split='test', test_area=args.test_area, block_points=NUM_POINT)
+    #TEST_DATASET_WHOLE_SCENE = ScannetDatasetWholeScene(root, split='test', test_area=args.test_area, block_points=NUM_POINT)
+    TEST_DATASET_WHOLE_SCENE = ShapeNetDatasetWholeScene(root, split='test', block_points=NUM_POINT)
     log_string("The number of test data is: %d" % len(TEST_DATASET_WHOLE_SCENE))
 
     '''MODEL LOADING'''
@@ -93,8 +99,10 @@ def main(args):
     classifier = classifier.eval()
 
     with torch.no_grad():
-        scene_id = TEST_DATASET_WHOLE_SCENE.file_list
-        scene_id = [x[:-4] for x in scene_id]
+        scene_id = TEST_DATASET_WHOLE_SCENE.uuid_list
+        #print(scene_id)
+        #scene_id = [x[:-4] for x in scene_id]
+
         num_batches = len(TEST_DATASET_WHOLE_SCENE)
 
         total_seen_class = [0 for _ in range(NUM_CLASSES)]
@@ -111,15 +119,20 @@ def main(args):
             if args.visual:
                 fout = open(os.path.join(visual_dir, scene_id[batch_idx] + '_pred.obj'), 'w')
                 fout_gt = open(os.path.join(visual_dir, scene_id[batch_idx] + '_gt.obj'), 'w')
+                print(os.path.join(visual_dir, scene_id[batch_idx] + '_pred.obj'))
 
+            #whole_scene_data = TEST_DATASET_WHOLE_SCENE.datapath[1][batch_idx]
+            #whole_scene_label = TEST_DATASET_WHOLE_SCENE.datapath[2][batch_idx]
+            #vote_label_pool = np.zeros((TEST_DATASET_WHOLE_SCENE.npoints, NUM_CLASSES))
             whole_scene_data = TEST_DATASET_WHOLE_SCENE.scene_points_list[batch_idx]
             whole_scene_label = TEST_DATASET_WHOLE_SCENE.semantic_labels_list[batch_idx]
             vote_label_pool = np.zeros((whole_scene_label.shape[0], NUM_CLASSES))
+            print(whole_scene_label)
             for _ in tqdm(range(args.num_votes), total=args.num_votes):
                 scene_data, scene_label, scene_smpw, scene_point_index = TEST_DATASET_WHOLE_SCENE[batch_idx]
                 num_blocks = scene_data.shape[0]
                 s_batch_num = (num_blocks + BATCH_SIZE - 1) // BATCH_SIZE
-                batch_data = np.zeros((BATCH_SIZE, NUM_POINT, 9))
+                batch_data = np.zeros((BATCH_SIZE, NUM_POINT, 6))
 
                 batch_label = np.zeros((BATCH_SIZE, NUM_POINT))
                 batch_point_index = np.zeros((BATCH_SIZE, NUM_POINT))
@@ -133,12 +146,18 @@ def main(args):
                     batch_label[0:real_batch_size, ...] = scene_label[start_idx:end_idx, ...]
                     batch_point_index[0:real_batch_size, ...] = scene_point_index[start_idx:end_idx, ...]
                     batch_smpw[0:real_batch_size, ...] = scene_smpw[start_idx:end_idx, ...]
-                    batch_data[:, :, 3:6] /= 1.0
+                    #batch_data[:, :, 3:4] /= 1.0
 
                     torch_data = torch.Tensor(batch_data)
                     torch_data = torch_data.float().cuda()
                     torch_data = torch_data.transpose(2, 1)
+                    start_time = time.time()
                     seg_pred, _ = classifier(torch_data)
+                    end_time = time.time()
+                    inference_time = end_time - start_time
+                    print("*********************inference time: ",end = ' ')
+                    print(inference_time*1000,"ms")
+
                     batch_pred_label = seg_pred.contiguous().cpu().data.max(2)[1].numpy()
 
                     vote_label_pool = add_vote(vote_label_pool, batch_point_index[0:real_batch_size, ...],
@@ -155,7 +174,7 @@ def main(args):
                 total_correct_class[l] += total_correct_class_tmp[l]
                 total_iou_deno_class[l] += total_iou_deno_class_tmp[l]
 
-            iou_map = np.array(total_correct_class_tmp) / (np.array(total_iou_deno_class_tmp, dtype=np.float) + 1e-6)
+            iou_map = np.array(total_correct_class_tmp) / (np.array(total_iou_deno_class_tmp, dtype=np.float64) + 1e-6)
             print(iou_map)
             arr = np.array(total_seen_class_tmp)
             tmp_iou = np.mean(iou_map[arr != 0])
